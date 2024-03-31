@@ -32,20 +32,17 @@ contract BloodBank {
     }
 
     struct Request {
-    bool isResponded;
-    BloodType bloodType;
-    uint amount;
-    bool response;
-   }
+        bool isResponded;
+        BloodType bloodType;
+        uint amount;
+        bool response;
+    }
 
-   
     mapping(address => Donor) public donors;
     mapping(address => Patient) public patients;
     mapping(address => Hospital) public hospitals;
     mapping(address => bool) public allowedDonors;
     mapping(address => bool) public allowedPatients;
-    mapping(address => bool) public bloodRequests;
-    mapping(BloodType => uint) public bloodInventory;
     mapping(address => mapping(BloodType => uint)) public donorBalances;
     mapping(address => mapping(BloodType => Request[])) public patientRequests;
     mapping(address => Request[]) public patientResponses; // Add mapping to store responses
@@ -61,14 +58,9 @@ contract BloodBank {
     event PatientPermissionGranted(address patient);
     event PatientPermissionRevoked(address patient);
     event RequestResponded(address patient, bool response, BloodType bloodType, uint amount);
-    event BloodRequested(address patient, Request request);
 
     modifier isAdmin() {
         require(msg.sender == admin, "Only the admin can perform this action");
-        _;
-    }
-    modifier onlyAdminOrPatient() {
-        require(msg.sender == admin || allowedPatients[msg.sender], "Permission denied");
         _;
     }
 
@@ -77,45 +69,40 @@ contract BloodBank {
     }
 
     function adminLogin() public returns (bool) {
-        emit AdminLoggedIn(msg.sender);
+        require(admin == address(0), "Admin already logged in");
+        admin = msg.sender;
+        emit AdminLoggedIn(admin);
         return true;
     }
 
-    function grantDonorPermission(address donorAddress) public {
+    function grantDonorPermission(address donorAddress) public isAdmin {
         require(!allowedDonors[donorAddress], "Donor already has permission");
         allowedDonors[donorAddress] = true;
         emit DonorPermissionGranted(donorAddress);
     }
 
-    function revokeDonorPermission(address donorAddress) public {
+    function revokeDonorPermission(address donorAddress) public isAdmin {
         require(allowedDonors[donorAddress], "Donor does not have permission");
         allowedDonors[donorAddress] = false;
         emit DonorPermissionRevoked(donorAddress);
     }
 
-    function isDonorAllowed(address donorAddress) public view returns (bool) {
-        return allowedDonors[donorAddress];
-    }
-
-    function grantPatientPermission(address patientAddress) public {
+    function grantPatientPermission(address patientAddress) public isAdmin {
         require(!allowedPatients[patientAddress], "Patient already has permission");
         allowedPatients[patientAddress] = true;
         emit PatientPermissionGranted(patientAddress);
     }
 
-    function revokePatientPermission(address patientAddress) public {
+    function revokePatientPermission(address patientAddress) public isAdmin {
         require(allowedPatients[patientAddress], "Patient does not have permission");
         allowedPatients[patientAddress] = false;
         emit PatientPermissionRevoked(patientAddress);
     }
 
-    function isPatientAllowed(address patientAddress) public view returns (bool) {
-        return allowedPatients[patientAddress];
-    }
-
     function addPatient(address patientAddress, string memory name, BloodType bloodType) public isAdmin {
         require(!patients[patientAddress].isRegistered, "Patient already registered");
         patients[patientAddress] = Patient(name, bloodType, true);
+        patientAddresses.push(patientAddress);
         totalPatients++;
         emit PatientRegistered(patientAddress, name, bloodType);
     }
@@ -128,88 +115,46 @@ contract BloodBank {
     }
 
     function registerAsDonor(string memory name, BloodType bloodType) public {
+        require(!donors[msg.sender].isRegistered, "Donor already registered");
         donors[msg.sender] = Donor(name, bloodType, true);
         donorAddresses.push(msg.sender);
         totalDonors++;
         emit DonorRegistered(msg.sender, name, bloodType);
     }
 
-    function registerAsPatient(string memory name, BloodType bloodType) public {
-        patients[msg.sender] = Patient(name, bloodType, true);
-        patientAddresses.push(msg.sender);
-        totalPatients++;
-        emit PatientRegistered(msg.sender, name, bloodType);
-    }
-
-    function locateHospitalToDonate(address hospitalAddress) public view returns (string memory name, address location) {
-        require(hospitals[hospitalAddress].isRegistered, "Hospital not registered");
-        return (hospitals[hospitalAddress].name, hospitals[hospitalAddress].location);
-    }
     function donateBlood(BloodType bloodType, uint amount) public {
-    require(donors[msg.sender].isRegistered, "Donor not registered");       
-    // Assuming a simplified storage for blood donation amounts
-    donorBalances[msg.sender][bloodType]++;
-    totalBloodDonated += amount;  // Increment the total blood donated
-    emit BloodDonated(msg.sender, bloodType, amount);
-}
-
-    // Function to get the total amount of blood donated
-    function getTotalBloodDonated() public view returns (uint) {
-        return totalBloodDonated;
+        require(donors[msg.sender].isRegistered, "Donor not registered");
+        donorBalances[msg.sender][bloodType] += amount;
+        totalBloodDonated += amount;
+        emit BloodDonated(msg.sender, bloodType, amount);
     }
 
-    // Function to get the blood inventory for a specific blood type
-    function getBloodInventory(BloodType bloodType) public view returns (uint) {
-        return bloodInventory[bloodType];
+    function requestBlood(BloodType bloodType, uint amount) public {
+        require(patients[msg.sender].isRegistered, "You need to register as a patient first");
+        Request memory newRequest = Request({
+            isResponded: false,
+            bloodType: bloodType,
+            amount: amount,
+            response: false
+        });
+        patientRequests[msg.sender][bloodType].push(newRequest);
+        emit BloodRequested(msg.sender, bloodType);
     }
 
-function requestBlood(BloodType bloodType, uint amount) public {
-    require(patients[msg.sender].isRegistered, "You need to register as a patient first");
-    // Create a new request object
-    Request memory newRequest = Request({
-        isResponded: false,
-        bloodType: bloodType,
-        amount: amount,
-        response: false
-    });
-    // Add the request to the patient's requests
-    patientRequests[msg.sender][newRequest.bloodType].push(newRequest);
-    // Emit blood request event with the entire request object
-    emit BloodRequested(msg.sender, newRequest);
-}
-
-function getPatientRequests(address patientAddress, BloodType bloodType) public view returns (Request[] memory) {
-    Request[] storage requests = patientRequests[patientAddress][bloodType];
-    Request[] memory result = new Request[](requests.length);
-    for (uint i = 0; i < requests.length; i++) {
-        result[i] = requests[i];
+    function respondToRequest(address patientAddress, BloodType bloodType, bool response) public isAdmin {
+        require(patientRequests[patientAddress][bloodType].length > 0, "No blood donation request found");
+        Request storage lastRequest = patientRequests[patientAddress][bloodType][patientRequests[patientAddress][bloodType].length - 1];
+        lastRequest.isResponded = true;
+        lastRequest.response = response;
+        patientResponses[patientAddress].push(lastRequest);
+        emit RequestResponded(patientAddress, response, lastRequest.bloodType, lastRequest.amount);
     }
-    return result;
-}
 
- function respondToRequest(address patientAddress, BloodType bloodType, bool response) public {
-    require(patients[patientAddress].isRegistered, "Patient not registered");
-    require(patientRequests[patientAddress][bloodType].length > 0, "No blood donation request found");
-
-    // Get the last request made by the patient
-    Request storage lastRequest = patientRequests[patientAddress][bloodType][patientRequests[patientAddress][bloodType].length - 1];
-
-    // Update the response for the last request
-    lastRequest.isResponded = true;
-    lastRequest.response = response;
-
-    // Store the response
-    patientResponses[patientAddress].push(lastRequest);
-
-    // Emit event for responding to blood donation request
-    emit RequestResponded(patientAddress, response, lastRequest.bloodType, lastRequest.amount);
-}
-
-    // Add a function to retrieve patient responses
     function getPatientResponses(address patientAddress) public view returns (Request[] memory) {
         return patientResponses[patientAddress];
     }
-        function getRegisteredUsers() public view returns (address[] memory registeredDonors, address[] memory registeredPatients) {
+
+    function getRegisteredUsers() public view returns (address[] memory registeredDonors, address[] memory registeredPatients) {
         return (donorAddresses, patientAddresses);
     }
 }
